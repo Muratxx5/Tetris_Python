@@ -1,0 +1,304 @@
+import curses
+import random
+import time
+
+TETROMINOS = {
+    'I': [[1, 1, 1, 1]],
+    'O': [[1, 1],
+          [1, 1]],
+    'T': [[0, 1, 0],
+          [1, 1, 1]],
+    'S': [[0, 1, 1],
+          [1, 1, 0]],
+    'Z': [[1, 1, 0],
+          [0, 1, 1]],
+    'J': [[1, 0, 0],
+          [1, 1, 1]],
+    'L': [[0, 0, 1],
+          [1, 1, 1]],
+}
+
+ROWS, COLS = 20, 10
+FRAME_LEFT = 2
+FRAME_TOP = 1
+PANEL_EXTRA_WIDTH = 20
+
+class Tetris:
+    def __init__(self, level=1, lines_cleared=0, score=0):
+        self.board = [[0] * COLS for _ in range(ROWS)]
+        self.score = score
+        self.level = level
+        self.lines_cleared = lines_cleared
+        self.current = self.new_piece()
+        self.next_piece = self.new_piece()
+        self.row, self.col = 0, COLS // 2 - 2
+
+    def new_piece(self):
+        shape = random.choice(list(TETROMINOS.keys()))
+        return [row[:] for row in TETROMINOS[shape]]
+
+    def rotate(self):
+        self.current = [list(row) for row in zip(*self.current[::-1])]
+        if self.collision(self.row, self.col):
+            self.current = [list(row) for row in zip(*self.current)][::-1]
+
+    def collision(self, row, col):
+        for r, line in enumerate(self.current):
+            for c, val in enumerate(line):
+                if val:
+                    rr, cc = row + r, col + c
+                    if rr < 0 or rr >= ROWS or cc < 0 or cc >= COLS or self.board[rr][cc]:
+                        return True
+        return False
+
+    def place_piece(self):
+        for r, line in enumerate(self.current):
+            for c, val in enumerate(line):
+                if val:
+                    self.board[self.row + r][self.col + c] = 1
+        cleared, cleared_rows = self.clear_lines()
+        self.current = self.next_piece
+        self.next_piece = self.new_piece()
+        self.row, self.col = 0, COLS // 2 - 2
+        if self.collision(self.row, self.col):
+            return False, cleared, cleared_rows
+        return True, cleared, cleared_rows
+
+    def clear_lines(self):
+        new_board = []
+        cleared_rows = []
+        for i, row in enumerate(self.board):
+            if all(row):
+                cleared_rows.append(i)
+            else:
+                new_board.append(row[:])
+        cleared = len(cleared_rows)
+        new_board = [[0]*COLS for _ in range(cleared)] + new_board
+        self.board = new_board[-ROWS:]
+        self.lines_cleared += cleared
+        self.score += cleared * 100
+        self.level = self.lines_cleared // 10 + 1
+        return cleared, cleared_rows
+
+    def move(self, drow, dcol):
+        if not self.collision(self.row + drow, self.col + dcol):
+            self.row += drow
+            self.col += dcol
+            return True
+        return False
+
+    def hard_drop(self, stdscr=None, draw_func=None, tick=0.03):
+        dropped = False
+        while not self.collision(self.row + 1, self.col):
+            self.row += 1
+            dropped = True
+            if stdscr and draw_func:
+                draw_func(stdscr, self, tick)
+                time.sleep(tick)
+        return self.place_piece()
+
+def safe_addstr(stdscr, y, x, text):
+    max_y, max_x = stdscr.getmaxyx()
+    if 0 <= y < max_y and 0 <= x < max_x:
+        try:
+            stdscr.addstr(y, x, text[:max_x - x])
+        except curses.error:
+            pass
+
+def draw_window(stdscr, game, tick_left, paused=False, message=None):
+    stdscr.clear()
+    top, left = FRAME_TOP, FRAME_LEFT
+
+    safe_addstr(stdscr, top - 1, left, '+' + '-' * (COLS * 2) + '+')
+    for r in range(ROWS):
+        safe_addstr(stdscr, top + r, left, '|')
+        safe_addstr(stdscr, top + r, left + COLS * 2 + 1, '|')
+    safe_addstr(stdscr, top + ROWS, left, '+' + '-' * (COLS * 2) + '+')
+
+    for r in range(ROWS):
+        for c in range(COLS):
+            if game.board[r][c]:
+                safe_addstr(stdscr, top + r, left + 1 + c * 2, "[]")
+
+    if not paused:
+        for r, line in enumerate(game.current):
+            for c, val in enumerate(line):
+                if val:
+                    rr, cc = game.row + r, game.col + c
+                    if 0 <= rr < ROWS and 0 <= cc < COLS:
+                        safe_addstr(stdscr, top + rr, left + 1 + cc * 2, "[]")
+
+    info_x = left + COLS * 2 + 5
+    safe_addstr(stdscr, top, info_x, f"Score: {game.score}")
+    safe_addstr(stdscr, top + 2, info_x, f"Level: {game.level}")
+    safe_addstr(stdscr, top + 4, info_x, f"Speed: {tick_left:.2f}s")
+    safe_addstr(stdscr, top + 6, info_x, "Next:")
+
+    for r, line in enumerate(game.next_piece):
+        for c, val in enumerate(line):
+            if val:
+                safe_addstr(stdscr, top + 7 + r, info_x + c * 2, "[]")
+
+    if paused:
+        pause_msg = "PAUSE - Devam için 'p' tuşu"
+        safe_addstr(stdscr, ROWS // 2, info_x, pause_msg)
+
+    if message:
+        safe_addstr(stdscr, ROWS // 2 + 2, info_x, message)
+
+    stdscr.refresh()
+
+def line_clear_effect(stdscr, game, cleared_rows):
+    top, left = FRAME_TOP, FRAME_LEFT
+    for _ in range(4):
+        for r in cleared_rows:
+            safe_addstr(stdscr, top + r, left + 1, "  " * COLS)
+        stdscr.refresh()
+        time.sleep(0.1)
+        for r in cleared_rows:
+            for c in range(COLS):
+                safe_addstr(stdscr, top + r, left + 1 + c * 2, "[]")
+        stdscr.refresh()
+        time.sleep(0.1)
+
+def wait_for_start(stdscr):
+    stdscr.clear()
+    msg = "Başlatmak için AŞAĞI ok tuşuna basınız"
+    safe_addstr(stdscr, 5, 5, msg)
+    stdscr.refresh()
+    while True:
+        key = stdscr.getch()
+        if key == curses.KEY_DOWN:
+            break
+        elif key == ord('q'):
+            return False
+        time.sleep(0.05)
+    return True
+
+def calc_tick(level):
+    return max(0.05, 1.0 * (0.85 ** (level - 1)))
+
+def confirm_exit(stdscr):
+    stdscr.clear()
+    msg1 = "Oyundan çıkmak istiyor musunuz? (e/h)"
+    safe_addstr(stdscr, 10, 5, msg1)
+    stdscr.refresh()
+    while True:
+        key = stdscr.getch()
+        if key in (ord('e'), ord('E')):
+            return True
+        elif key in (ord('h'), ord('H')):
+            return False
+        time.sleep(0.05)
+
+def game_loop(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(100)
+
+    start = wait_for_start(stdscr)
+    if not start:
+        return
+
+    level = 1
+    lines_cleared = 0
+    score = 0
+
+    space_pressed = False
+
+    while True:
+        game = Tetris(level=level, lines_cleared=lines_cleared, score=score)
+        tick = calc_tick(game.level)
+        last_time = time.time()
+        fast_drop = False
+        game_over = False
+        paused = False
+
+        while True:
+            if not paused:
+                now = time.time()
+                interval = 0.05 if fast_drop else tick
+                if now - last_time > interval:
+                    if not game.move(1, 0):
+                        placed, cleared, cleared_rows = game.place_piece()
+                        if not placed:
+                            game_over = True
+                            break
+                        if cleared > 0:
+                            line_clear_effect(stdscr, game, cleared_rows)
+                            level = game.level
+                            lines_cleared = game.lines_cleared
+                            score = game.score
+                            tick = calc_tick(level)
+                    last_time = now
+
+            key = stdscr.getch()
+            if key == ord('q'):
+                if confirm_exit(stdscr):
+                    return  # Oyundan çıkış
+                else:
+                    draw_window(stdscr, game, tick, paused)
+                    continue
+            elif key == ord('p'):
+                paused = not paused
+            elif paused:
+                draw_window(stdscr, game, tick, paused=True)
+                time.sleep(0.05)
+                continue
+            elif key == curses.KEY_LEFT:
+                game.move(0, -1)
+                fast_drop = False
+            elif key == curses.KEY_RIGHT:
+                game.move(0, 1)
+                fast_drop = False
+            elif key == curses.KEY_DOWN:
+                fast_drop = True
+            elif key == curses.KEY_UP:
+                game.rotate()
+                fast_drop = False
+            elif key == ord(' '):
+                if not space_pressed:
+                    placed, cleared, cleared_rows = game.hard_drop(
+                        stdscr, draw_window, tick=0.03)
+                    space_pressed = True
+                    if not placed:
+                        game_over = True
+                        break
+                    if cleared > 0:
+                        line_clear_effect(stdscr, game, cleared_rows)
+                        level = game.level
+                        lines_cleared = game.lines_cleared
+                        score = game.score
+                        tick = calc_tick(level)
+                    fast_drop = False
+                    last_time = time.time()
+            elif key == -1:
+                space_pressed = False
+                fast_drop = False
+            else:
+                space_pressed = False
+                fast_drop = False
+
+            draw_window(stdscr, game, tick, paused)
+
+        stdscr.clear()
+        msg1 = "OYUN BİTTİ"
+        msg2 = "Yeniden başlatmak için R, çıkmak için Q tuşuna basınız"
+        safe_addstr(stdscr, 7, 5, msg1)
+        safe_addstr(stdscr, 8, 5, msg2)
+        stdscr.refresh()
+
+        while True:
+            key = stdscr.getch()
+            if key in (ord('r'), ord('R')):
+                break
+            elif key in (ord('q'), ord('Q')):
+                if confirm_exit(stdscr):
+                    return
+            time.sleep(0.05)
+
+def main():
+    curses.wrapper(game_loop)
+
+if __name__ == "__main__":
+    main()
